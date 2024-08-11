@@ -42,11 +42,33 @@ static void fscrypt_get_devices(struct super_block *sb, int num_devs,
 		sb->s_cop->get_devices(sb, devs);
 }
 
+#define SDHCI "sdhci"
+
+int fscrypt_find_storage_type(char **device)
+{
+	char boot[20] = {'\0'};
+	char *match = (char *)strnstr(saved_command_line,
+				      "androidboot.bootdevice=",
+				      strlen(saved_command_line));
+	if (match) {
+		memcpy(boot, (match + strlen("androidboot.bootdevice=")),
+			sizeof(boot) - 1);
+
+		if (strnstr(boot, "sdhci", strlen(boot)))
+			*device = SDHCI;
+
+		return 0;
+	}
+	return -EINVAL;
+}
+EXPORT_SYMBOL(fscrypt_find_storage_type);
+
 static unsigned int fscrypt_get_dun_bytes(const struct fscrypt_info *ci)
 {
 	struct super_block *sb = ci->ci_inode->i_sb;
 	unsigned int flags = fscrypt_policy_flags(&ci->ci_policy);
 	int ino_bits = 64, lblk_bits = 64;
+	char *s_type = "ufs";
 
 	if (flags & FSCRYPT_POLICY_FLAG_DIRECT_KEY)
 		return offsetofend(union fscrypt_iv, nonce);
@@ -56,6 +78,15 @@ static unsigned int fscrypt_get_dun_bytes(const struct fscrypt_info *ci)
 
 	if (flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32)
 		return sizeof(__le32);
+
+	if (fscrypt_policy_contents_mode(&ci->ci_policy) ==
+	    FSCRYPT_MODE_PRIVATE) {
+		fscrypt_find_storage_type(&s_type);
+		if (!strcmp(s_type, "sdhci"))
+			return sizeof(__le32);
+		else
+			return sizeof(__le64);
+	}
 
 	/* Default case: IVs are just the file logical block number */
 	if (sb->s_cop->get_ino_and_lblk_bits)
@@ -151,6 +182,9 @@ int fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
 	struct fscrypt_blk_crypto_key *blk_key;
 	int err;
 	int i;
+#ifdef CONFIG_FSCRYPT_SDP
+	bool is_sdp = false;
+#endif
 
 	num_devs = fscrypt_get_num_devices(sb);
 	if (WARN_ON(num_devs < 1))
@@ -159,7 +193,10 @@ int fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
 	blk_key = kzalloc(struct_size(blk_key, devs, num_devs), GFP_NOFS);
 	if (!blk_key)
 		return -ENOMEM;
-
+#ifdef CONFIG_FSCRYPT_SDP
+	if (fscrypt_sdp_is_classified(ci))
+		is_sdp = true;
+#endif
 	blk_key->num_devs = num_devs;
 	fscrypt_get_devices(sb, num_devs, blk_key->devs);
 
@@ -169,7 +206,11 @@ int fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
 		     BLK_CRYPTO_MAX_WRAPPED_KEY_SIZE);
 
 	err = blk_crypto_init_key(&blk_key->base, raw_key, raw_key_size,
+#ifdef CONFIG_FSCRYPT_SDP
+				  is_hw_wrapped, is_sdp, crypto_mode, dun_bytes,
+#else
 				  is_hw_wrapped, crypto_mode, dun_bytes,
+#endif
 				  sb->s_blocksize);
 	if (err) {
 		fscrypt_err(inode, "error %d initializing blk-crypto key", err);
@@ -194,6 +235,9 @@ int fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
 		err = blk_crypto_start_using_mode(crypto_mode, dun_bytes,
 						  sb->s_blocksize,
 						  is_hw_wrapped,
+#ifdef CONFIG_FSCRYPT_SDP
+						  is_sdp,
+#endif
 						  blk_key->devs[i]);
 		if (err) {
 			fscrypt_err(inode,
@@ -282,13 +326,28 @@ static void fscrypt_generate_dun(const struct fscrypt_info *ci, u64 lblk_num,
 {
 	union fscrypt_iv iv;
 	int i;
+#ifdef CONFIG_FSCRYPT_SDP
+	unsigned int flags = fscrypt_policy_flags(&ci->ci_policy);
+	bool old_dun;
+#endif
 
 	fscrypt_generate_iv(&iv, lblk_num, ci);
 
 	BUILD_BUG_ON(FSCRYPT_MAX_IV_SIZE > BLK_CRYPTO_MAX_IV_SIZE);
 	memset(dun, 0, BLK_CRYPTO_MAX_IV_SIZE);
+#ifdef CONFIG_FSCRYPT_SDP
+	old_dun = fscrypt_sdp_is_classified(ci) && !(flags & FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32);
+	for (i = 0; i < ci->ci_mode->ivsize/sizeof(dun[0]); i++) {
+		if (old_dun) {
+			dun[i] = le64_to_cpu(iv.dun[i]) & 0xffffffff;
+		} else {
+			dun[i] = le64_to_cpu(iv.dun[i]);
+		}
+	}
+#else
 	for (i = 0; i < ci->ci_mode->ivsize/sizeof(dun[0]); i++)
 		dun[i] = le64_to_cpu(iv.dun[i]);
+#endif
 }
 
 /**
@@ -323,6 +382,10 @@ void fscrypt_set_bio_crypt_ctx(struct bio *bio, const struct inode *inode,
 
 	fscrypt_generate_dun(ci, first_lblk, dun);
 	bio_crypt_set_ctx(bio, &ci->ci_key.blk_key->base, dun, gfp_mask);
+	if ((fscrypt_policy_contents_mode(&ci->ci_policy) ==
+	    FSCRYPT_MODE_PRIVATE) &&
+	    (!strcmp(inode->i_sb->s_type->name, "ext4")))
+		bio->bi_crypt_context->is_ext4 = true;
 }
 EXPORT_SYMBOL_GPL(fscrypt_set_bio_crypt_ctx);
 

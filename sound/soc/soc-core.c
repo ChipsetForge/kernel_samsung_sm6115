@@ -51,6 +51,13 @@ EXPORT_SYMBOL_GPL(snd_soc_debugfs_root);
 #endif
 
 static DEFINE_MUTEX(client_mutex);
+//+Bug702114, qiuyonghui.wt, 20211129 add mmitest and smartpa info
+static DEFINE_MUTEX(smartpa_mutex);
+int smartpa_type=INVALD;
+EXPORT_SYMBOL(smartpa_type);
+module_param(smartpa_type, int, 0664);
+MODULE_PARM_DESC(smartpa_type, "show smartpa type");
+//-Bug702114, qiuyonghui.wt, 20211129 add mmitest and smartpa info
 static LIST_HEAD(component_list);
 
 /*
@@ -154,7 +161,7 @@ static void soc_init_component_debugfs(struct snd_soc_component *component)
 	}
 
 	if (!component->debugfs_root) {
-		dev_warn(component->dev,
+		dev_dbg(component->dev,
 			"ASoC: Failed to create component debugfs directory\n");
 		return;
 	}
@@ -733,6 +740,12 @@ struct snd_soc_component *soc_find_component(
 {
 	struct snd_soc_component *component;
 
+	if (!of_node && !name) {
+		pr_err("%s: Either of_node or name must be valid\n",
+			__func__);
+		return NULL;
+	}
+
 	lockdep_assert_held(&client_mutex);
 
 	list_for_each_entry(component, &component_list, list) {
@@ -747,6 +760,28 @@ struct snd_soc_component *soc_find_component(
 	return NULL;
 }
 EXPORT_SYMBOL(soc_find_component);
+
+/**
+ * soc_find_component_locked: soc_find_component with client lock acquired
+ *
+ * @of_node: of_node of the component to query.
+ * @name: name of the component to query.
+ *
+ * function to find out if a component is already registered with ASoC core.
+ *
+ * Returns component handle for success, else NULL error.
+ */
+struct snd_soc_component *soc_find_component_locked(
+	const struct device_node *of_node, const char *name)
+{
+	struct snd_soc_component *component = NULL;
+
+	mutex_lock(&client_mutex);
+	component = soc_find_component(of_node, name);
+	mutex_unlock(&client_mutex);
+	return component;
+}
+EXPORT_SYMBOL(soc_find_component_locked);
 
 /**
  * snd_soc_find_dai - Find a registered DAI
@@ -2764,6 +2799,7 @@ int snd_soc_register_card(struct snd_soc_card *card)
 	mutex_init(&card->mutex);
 	mutex_init(&card->dapm_mutex);
 	mutex_init(&card->dapm_power_mutex);
+	spin_lock_init(&card->dpcm_lock);
 
 	ret = snd_soc_instantiate_card(card);
 	if (ret != 0)
@@ -2971,7 +3007,35 @@ err:
 
 	return ret;
 }
-
+//+Bug702114, qiuyonghui.wt, 20211129 add mmitest and smartpa info
+struct device *audio_device = NULL;
+int snd_soc_set_smartpa_type(const char * name, int pa_type)
+{
+	pr_info("%s driver set smartpa type is : %d",name,pa_type);
+	mutex_lock(&smartpa_mutex);
+	switch(pa_type)
+	{
+	case FS16XX:
+			smartpa_type=FS16XX;
+		break;
+	case FS18XX:
+			smartpa_type=FS18XX;
+		break;
+	case AW8825:
+			smartpa_type=AW8825;
+	    break;
+    case TAS2558:
+			smartpa_type=TAS2558;
+	    break;
+	default:
+			pr_info("this PA does not support\n\r");
+		break;
+	}
+	mutex_unlock(&smartpa_mutex);
+	return smartpa_type;
+}
+EXPORT_SYMBOL_GPL(snd_soc_set_smartpa_type);
+//-Bug702114, qiuyonghui.wt, 20211129 add mmitest and smartpa info
 /**
  * snd_soc_register_dai - Register a DAI dynamically & create its widgets
  *
@@ -3309,9 +3373,10 @@ EXPORT_SYMBOL_GPL(snd_soc_lookup_component);
  */
 void snd_soc_card_change_online_state(struct snd_soc_card *soc_card, int online)
 {
-	snd_card_change_online_state(soc_card->snd_card, online);
+	if (soc_card && soc_card->snd_card)
+		snd_card_change_online_state(soc_card->snd_card, online);
 }
-EXPORT_SYMBOL_GPL(snd_soc_card_change_online_state);
+EXPORT_SYMBOL(snd_soc_card_change_online_state);
 
 /* Retrieve a card's name from device tree */
 int snd_soc_of_parse_card_name(struct snd_soc_card *card,
