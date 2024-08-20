@@ -29,13 +29,13 @@ echo " |_|  \_\ |______| \_____/  |______| |_|   \__| "
 
 regen() {
 rm -rf out
-make O=out ARCH=arm64 ${DEVICE}_defconfig	\
+make O=out ARCH=arm64 ${DEVICE}_eur_open_defconfig	\
    	   LLVM=1						\
    	   LLVM_IAS=1						\
    	   PATH="$HOME/tc/bin/:${PATH}"
 
-rm -rf arch/arm64/configs/${DEVICE}_defconfig
-mv out/.config arch/arm64/configs/${DEVICE}_defconfig
+rm -rf arch/arm64/configs/${DEVICE}_eur_open_defconfig
+mv out/.config arch/arm64/configs/${DEVICE}_eur_open_defconfig
 }
 
 gta4lwifi() {
@@ -43,10 +43,10 @@ DEVICE=gta4lwifi
 regen
 }
 
-cepheus
+gta4lwifi
 rm -rf out
 
-git add arch/arm64/configs/${DEVICE}_defconfig
+git add arch/arm64/configs/${DEVICE}_eur_open_defconfig
 git commit -asm "gta4lwifi: Regenerate defconfigs"
 
 elif [[ "$selector" == "2" ]]; then 
@@ -59,13 +59,13 @@ echo " |_|  \_\ |______| \_____/  |______| |_|   \__| "
 
 regen() {
 rm -rf out
-make O=out ARCH=arm64 ${DEVICE}_defconfig savedefconfig	\
+make O=out ARCH=arm64 ${DEVICE}_eur_open_defconfig savedefconfig	\
    	   LLVM=1								\
    	   LLVM_IAS=1								\
    	   PATH="$HOME/tc/bin/:${PATH}"
    	   
-rm -rf arch/arm64/configs/${DEVICE}_defconfig
-mv out/defconfig arch/arm64/configs/${DEVICE}_defconfig
+rm -rf arch/arm64/configs/${DEVICE}_eur_open_defconfig
+mv out/defconfig arch/arm64/configs/${DEVICE}_eur_open_defconfig
 }
 
 gta4lwifi() {
@@ -76,7 +76,7 @@ regen
 gta4lwifi
 rm -rf out
 
-git add arch/arm64/configs/${DEVICE}_defconfig
+git add arch/arm64/configs/${DEVICE}_eur_open_defconfig
 git commit -asm "gta4lwifi: Regenerate with Savedefconfig"
 elif [[ "$selector" == "e" ]]; then
     exit
